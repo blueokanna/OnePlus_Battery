@@ -1,0 +1,35 @@
+# ============================================================
+# OPlus CN x OOS/ColorOS 充电修复属性
+# Magisk 在 post-fs-data 阶段通过 resetprop 注入
+# 优先级高于 vendor 默认值，且不修改任何分区
+# ============================================================
+
+# [1] 充电守护进程版本声明
+persist.vendor.oplus.charger.version=2
+persist.vendor.oppo.charger.version=2
+
+# [2] VOOC 物理层协议支持级别
+#     3 = SuperVOOC 2.0 / 100W（典型国行充电IC）
+persist.vendor.oplus.charger.voocphy_support=3
+persist.vendor.oppo.charger.voocphy_support=3
+
+# [3] 禁用 PPS 异常检测（偶发充不进去最常见根因）
+persist.sys.oplus.charge.pps.disable=0
+persist.sys.oppo.charge.pps.disable=0
+
+# [4] 禁止充电守护进程将 SuperVOOC 降级回退为 QC
+persist.vendor.oplus.charger.chg_vooc_qc_back=0
+persist.vendor.oppo.charger.chg_vooc_qc_back=0
+
+# [5] 关闭出厂 MMI 测试模式（该模式会限制充电速率/次数）
+persist.vendor.oplus.charger.mmi_test=0
+persist.vendor.oppo.charger.mmi_test=0
+
+# [6] 禁止强制 80% 充电截止（防止误触发后充不进）
+persist.sys.oplus.charge.limit.enable=0
+persist.sys.oppo.charge.limit.enable=0
+
+# [7] 允许 USB 认证失败时降级继续充电
+#     防止 OOS 认证链差异导致完全拒绝充电事件
+persist.vendor.oplus.charger.check_usb=0
+persist.vendor.oppo.charger.check_usb=0

@@ -1,0 +1,6 @@
+id=op12_charging_fix
+name=OnePlus/OPlus 充电兼容修复 (国行硬件)
+version=v1.3
+versionCode=13
+author=Custom
+description=优化国行 OPlus 硬件在 OxygenOS/ColorOS 下的充电兼容性，修复偶发充不进、快充协议不触发与属性命名差异导致的问题。Systemless，不改 system 分区。
