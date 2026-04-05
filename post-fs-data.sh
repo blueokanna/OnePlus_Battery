@@ -75,6 +75,16 @@ else
 	log_p "C2C开关沿用现有配置: oplus=${C2C_MODE_OPLUS:-<empty>}, oppo=${C2C_MODE_OPPO:-<empty>}"
 fi
 
+C2C_SCREENGUARD_OPLUS=$(getprop persist.sys.oplus.c2c.screenoff.guard)
+C2C_SCREENGUARD_OPPO=$(getprop persist.sys.oppo.c2c.screenoff.guard)
+if [ -z "$C2C_SCREENGUARD_OPLUS" ] && [ -z "$C2C_SCREENGUARD_OPPO" ]; then
+	# 默认启用锁屏守护，避免灭屏时误触发强动作造成反复重连
+	set_prop_dual "persist.sys.oplus.c2c.screenoff.guard" "persist.sys.oppo.c2c.screenoff.guard" "1"
+	log_p "锁屏守护默认初始化: screenoff.guard=1"
+else
+	log_p "锁屏守护沿用现有配置: oplus=${C2C_SCREENGUARD_OPLUS:-<empty>}, oppo=${C2C_SCREENGUARD_OPPO:-<empty>}"
+fi
+
 PROFILE=$(detect_profile)
 BAT_TEMP=$(read_battery_temp)
 HOT_MODE=0
