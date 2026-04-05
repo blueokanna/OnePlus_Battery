@@ -21,7 +21,7 @@ ui_print "  区域: ${REGION:-unknown}"
 ui_print " "
 
 # 设备识别（优先识别 OP12 国行/国际硬件）
-if echo "$MODEL $DEVICE" | grep -qiE "OnePlus 12|CPH2573|PJD110|salami"; then
+if echo "$MODEL $DEVICE" | grep -qiE "OnePlus 12|CPH2573|CPH2581|PJD110|salami"; then
     ui_print "  ✓ 已识别为 OnePlus 12 系列硬件"
 elif echo "$MODEL $DEVICE" | grep -qiE "OnePlus|OPPO|PJD|CPH"; then
     ui_print "  ✓ 已识别为 OPlus 系硬件（兼容模式）"
@@ -39,7 +39,7 @@ else
     ui_print "  ⚠ 系统标识不明确，将启用双命名空间兼容策略"
 fi
 
-if echo "$REGION" | grep -qiE "CN|China|CHN|PRC"; then
+if echo "$REGION" | grep -qiE "CN|China|CHN|PRC|ROW"; then
     ui_print "  ✓ 国行区域标识已检测到"
 elif [ -n "$REGION" ]; then
     ui_print "  ℹ 区域标识为 $REGION（仍会启用兼容注入）"
@@ -67,6 +67,8 @@ ui_print "  • 高温场景保守充电策略（减少副作用）"
 ui_print "  • C2C 连接电脑偶发不充电自动恢复"
 ui_print "  • C2C 强修复开关 + 防反复重连抖动"
 ui_print "  • 锁屏/灭屏场景 C2C 防跳连守护"
+ui_print "  • 按电脑端口类型自动策略（SDP/CDP/Unknown）"
+ui_print "  • 黑屏短时多次重连自动进入稳定保护态"
 ui_print " "
 ui_print "  诊断日志："
 ui_print "  /data/local/tmp/op12_chg_fix.log"

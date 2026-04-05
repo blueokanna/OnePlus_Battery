@@ -28,6 +28,19 @@ read_first_value() {
     echo ""
 }
 
+abs_int() {
+    local n="$1"
+    if [ -z "$n" ]; then
+        echo ""
+        return
+    fi
+    if [ "$n" -lt 0 ] 2>/dev/null; then
+        echo $((0 - n))
+    else
+        echo "$n"
+    fi
+}
+
 read_screen_state() {
     local blank
     blank=$(read_first_value /sys/class/graphics/fb0/blank /sys/class/graphics/fb1/blank)
@@ -137,6 +150,130 @@ get_screenoff_guard_mode() {
     esac
 }
 
+get_port_policy_mode() {
+    # 0: 关闭端口自适应策略(兼容旧行为); 1: 开启(默认)
+    local mode
+    mode=$(read_prop_any \
+        persist.sys.oplus.c2c.port.policy.enable \
+        persist.sys.oppo.c2c.port.policy.enable)
+
+    case "$mode" in
+        0|off|OFF|false|FALSE)
+            echo "0"
+            ;;
+        *)
+            echo "1"
+            ;;
+    esac
+}
+
+get_flap_guard_mode() {
+    # 0: 关闭黑屏防抖守护; 1: 开启(默认)
+    local mode
+    mode=$(read_prop_any \
+        persist.sys.oplus.c2c.flap.guard.enable \
+        persist.sys.oppo.c2c.flap.guard.enable)
+
+    case "$mode" in
+        0|off|OFF|false|FALSE)
+            echo "0"
+            ;;
+        *)
+            echo "1"
+            ;;
+    esac
+}
+
+classify_usb_port_type() {
+    local t="$1"
+
+    case "$t" in
+        *sdp*)
+            echo "sdp"
+            ;;
+        *cdp*)
+            echo "cdp"
+            ;;
+        *dcp*|*pd*|*qc*|*vooc*|*dash*|*warp*|*ac*|*charger*)
+            echo "charger"
+            ;;
+        *usb*|*unknown*)
+            echo "unknown_pc"
+            ;;
+        *)
+            echo "other"
+            ;;
+    esac
+}
+
+get_flap_top_class() {
+    local top_class="sdp"
+    local top_count="$FLAP_TRIG_SDP"
+
+    if [ "$FLAP_TRIG_CDP" -gt "$top_count" ]; then
+        top_class="cdp"
+        top_count="$FLAP_TRIG_CDP"
+    fi
+    if [ "$FLAP_TRIG_UNKNOWN_PC" -gt "$top_count" ]; then
+        top_class="unknown_pc"
+        top_count="$FLAP_TRIG_UNKNOWN_PC"
+    fi
+    if [ "$FLAP_TRIG_CHARGER" -gt "$top_count" ]; then
+        top_class="charger"
+        top_count="$FLAP_TRIG_CHARGER"
+    fi
+    if [ "$FLAP_TRIG_OTHER" -gt "$top_count" ]; then
+        top_class="other"
+        top_count="$FLAP_TRIG_OTHER"
+    fi
+    if [ "$FLAP_TRIG_LEGACY" -gt "$top_count" ]; then
+        top_class="legacy"
+        top_count="$FLAP_TRIG_LEGACY"
+    fi
+
+    echo "${top_class}:${top_count}"
+}
+
+record_flap_trigger() {
+    local cls="$1"
+    local reason="$2"
+    local top_info
+
+    FLAP_TRIG_TOTAL=$((FLAP_TRIG_TOTAL + 1))
+    case "$cls" in
+        sdp)
+            FLAP_TRIG_SDP=$((FLAP_TRIG_SDP + 1))
+            ;;
+        cdp)
+            FLAP_TRIG_CDP=$((FLAP_TRIG_CDP + 1))
+            ;;
+        unknown_pc)
+            FLAP_TRIG_UNKNOWN_PC=$((FLAP_TRIG_UNKNOWN_PC + 1))
+            ;;
+        charger)
+            FLAP_TRIG_CHARGER=$((FLAP_TRIG_CHARGER + 1))
+            ;;
+        other)
+            FLAP_TRIG_OTHER=$((FLAP_TRIG_OTHER + 1))
+            ;;
+        *)
+            FLAP_TRIG_LEGACY=$((FLAP_TRIG_LEGACY + 1))
+            ;;
+    esac
+
+    top_info=$(get_flap_top_class)
+    log_msg "[防抖统计] trigger#${FLAP_TRIG_TOTAL} reason=${reason} class=${cls} top=${top_info} sdp=${FLAP_TRIG_SDP} cdp=${FLAP_TRIG_CDP} unknown_pc=${FLAP_TRIG_UNKNOWN_PC} charger=${FLAP_TRIG_CHARGER} other=${FLAP_TRIG_OTHER} legacy=${FLAP_TRIG_LEGACY}"
+}
+
+log_flap_summary() {
+    local tag="$1"
+    local top_info
+
+    [ "$FLAP_TRIG_TOTAL" -le 0 ] && return
+    top_info=$(get_flap_top_class)
+    log_msg "[防抖统计汇总][${tag}] total=${FLAP_TRIG_TOTAL} top=${top_info} sdp=${FLAP_TRIG_SDP} cdp=${FLAP_TRIG_CDP} unknown_pc=${FLAP_TRIG_UNKNOWN_PC} charger=${FLAP_TRIG_CHARGER} other=${FLAP_TRIG_OTHER} legacy=${FLAP_TRIG_LEGACY}"
+}
+
 until [ "$(getprop sys.boot_completed)" = "1" ]; do
     sleep 2
 done
@@ -150,7 +287,7 @@ if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 524288 ]; then
 fi
 
 log_msg "======================================"
-log_msg "  OPlus 充电兼容修复 v1.7 - 启动诊断"
+log_msg "  OPlus 充电兼容修复 v1.1 - 启动诊断"
 log_msg "======================================"
 log_msg "型号  : $(getprop ro.product.model) ($(getprop ro.product.device))"
 log_msg "系统  : $(getprop ro.build.display.id)"
@@ -345,12 +482,27 @@ log_msg "日志路径: $LOG"
 log_msg "C2C监控: 已启用（8秒轮询，智能防抖 + 冷却控制）"
 log_msg "C2C开关: persist.sys.oplus.c2c.fix.mode = 0(关闭) / 1(智能默认) / 2(强修复)"
 log_msg "锁屏守护: persist.sys.oplus.c2c.screenoff.guard = 0(关闭) / 1(开启默认)"
+log_msg "端口策略: persist.sys.oplus.c2c.port.policy.enable = 0(旧行为) / 1(按SDP/CDP自适应,默认)"
+log_msg "黑屏防抖: persist.sys.oplus.c2c.flap.guard.enable = 0(关闭) / 1(开启默认)"
+log_msg "防抖统计: 已启用（记录黑屏保护态触发次数与端口类型命中）"
 
 LAST_C2C_STATE="init"
 LAST_USB_ONLINE=""
 LAST_SCREEN_STATE="unknown"
+LAST_PORT_CLASS="init"
 BAD_STREAK=0
 SESSION_ID=0
+LAST_SESSION_TS=0
+SESSION_CHURN_COUNT=0
+FLAP_GUARD_UNTIL=0
+FLAP_TRIG_TOTAL=0
+FLAP_TRIG_SDP=0
+FLAP_TRIG_CDP=0
+FLAP_TRIG_UNKNOWN_PC=0
+FLAP_TRIG_CHARGER=0
+FLAP_TRIG_OTHER=0
+FLAP_TRIG_LEGACY=0
+LAST_STATS_REPORT_TS=0
 HARD_ACTIONS_IN_SESSION=0
 LAST_HARD_ACTION_TS=0
 LAST_SOFT_ACTION_TS=0
@@ -364,11 +516,18 @@ HARD_MAX_PER_SESSION=1
 SMART_HARD_STREAK=8
 SCREENOFF_SOFT_TRIGGER_STREAK=6
 SCREENOFF_SOFT_COOLDOWN_SEC=180
+SESSION_CHURN_WINDOW_SEC=180
+SESSION_CHURN_THRESHOLD=4
+FLAP_GUARD_HOLD_SEC=300
+FLAP_GUARD_SOFT_COOLDOWN_SEC=300
+STATS_REPORT_INTERVAL_SEC=600
 
 while true; do
     apply_temp_policy
     C2C_FIX_MODE=$(get_c2c_fix_mode)
     SCREENOFF_GUARD_MODE=$(get_screenoff_guard_mode)
+    PORT_POLICY_MODE=$(get_port_policy_mode)
+    FLAP_GUARD_MODE=$(get_flap_guard_mode)
 
     USB_ONLINE=$(read_first_value /sys/class/power_supply/usb/online /sys/class/power_supply/pc_port/online)
     [ -z "$USB_ONLINE" ] && USB_ONLINE="0"
@@ -376,6 +535,7 @@ while true; do
     USB_ROLE=$(read_first_value /sys/class/typec/port0/power_role /sys/class/typec/port1/power_role)
     BAT_STATUS=$(read_first_value /sys/class/power_supply/battery/status)
     BAT_CURRENT_NOW=$(read_first_value /sys/class/power_supply/battery/current_now)
+    USB_CURRENT_NOW=$(read_first_value /sys/class/power_supply/usb/current_now /sys/class/power_supply/usb/input_current_now /sys/class/power_supply/pc_port/current_now /sys/class/power_supply/pc_port/input_current_now)
     SCREEN_STATE=$(read_screen_state)
     NOW_TS=$(date +%s)
 
@@ -383,13 +543,17 @@ while true; do
     USB_ROLE_L=$(echo "$USB_ROLE" | tr '[:upper:]' '[:lower:]')
     BAT_STATUS_L=$(echo "$BAT_STATUS" | tr '[:upper:]' '[:lower:]')
     BAT_CURRENT_NOW_CLEAN=$(echo "$BAT_CURRENT_NOW" | tr -cd '0-9-')
-    BAT_CURRENT_ABS=""
-    if [ -n "$BAT_CURRENT_NOW_CLEAN" ]; then
-        if [ "$BAT_CURRENT_NOW_CLEAN" -lt 0 ] 2>/dev/null; then
-            BAT_CURRENT_ABS=$((0 - BAT_CURRENT_NOW_CLEAN))
-        else
-            BAT_CURRENT_ABS="$BAT_CURRENT_NOW_CLEAN"
-        fi
+    USB_CURRENT_NOW_CLEAN=$(echo "$USB_CURRENT_NOW" | tr -cd '0-9-')
+    BAT_CURRENT_ABS=$(abs_int "$BAT_CURRENT_NOW_CLEAN")
+    USB_CURRENT_ABS=$(abs_int "$USB_CURRENT_NOW_CLEAN")
+
+    PORT_CLASS="legacy"
+    if [ "$PORT_POLICY_MODE" = "1" ]; then
+        PORT_CLASS=$(classify_usb_port_type "$USB_TYPE_L")
+    fi
+    if [ "$PORT_CLASS" != "$LAST_PORT_CLASS" ]; then
+        log_msg "[端口策略] mode=${PORT_POLICY_MODE}, type=${USB_TYPE:-unknown}, class=${PORT_CLASS}"
+        LAST_PORT_CLASS="$PORT_CLASS"
     fi
 
     if [ "$SCREEN_STATE" != "$LAST_SCREEN_STATE" ]; then
@@ -403,6 +567,20 @@ while true; do
         HARD_ACTIONS_IN_SESSION=0
         BAD_STREAK=0
         log_msg "[C2C会话] 新会话 #$SESSION_ID"
+
+        if [ "$LAST_SESSION_TS" -gt 0 ] && [ $((NOW_TS - LAST_SESSION_TS)) -le "$SESSION_CHURN_WINDOW_SEC" ]; then
+            SESSION_CHURN_COUNT=$((SESSION_CHURN_COUNT + 1))
+        else
+            SESSION_CHURN_COUNT=1
+        fi
+        LAST_SESSION_TS=$NOW_TS
+
+        if [ "$FLAP_GUARD_MODE" = "1" ] && [ "$SCREEN_STATE" != "on" ] && [ "$SESSION_CHURN_COUNT" -ge "$SESSION_CHURN_THRESHOLD" ]; then
+            FLAP_GUARD_UNTIL=$((NOW_TS + FLAP_GUARD_HOLD_SEC))
+            BAD_STREAK=0
+            record_flap_trigger "$PORT_CLASS" "session_churn"
+            log_msg "[防抖守护] 检测到黑屏短时多次重连(churn=$SESSION_CHURN_COUNT)，进入稳定充电保护态 ${FLAP_GUARD_HOLD_SEC}s"
+        fi
     elif [ "$USB_ONLINE" != "1" ] && [ "$LAST_USB_ONLINE" = "1" ]; then
         BAD_STREAK=0
         HARD_ACTIONS_IN_SESSION=0
@@ -413,21 +591,83 @@ while true; do
     LAST_USB_ONLINE="$USB_ONLINE"
 
     C2C_PC_LINK=0
-    if [ "$USB_ONLINE" = "1" ] && echo "$USB_TYPE_L" | grep -qiE "usb|sdp|cdp|unknown"; then
-        C2C_PC_LINK=1
+    if [ "$PORT_POLICY_MODE" = "1" ]; then
+        case "$PORT_CLASS" in
+            sdp|cdp|unknown_pc)
+                [ "$USB_ONLINE" = "1" ] && C2C_PC_LINK=1
+                ;;
+            *)
+                C2C_PC_LINK=0
+                ;;
+        esac
+    else
+        if [ "$USB_ONLINE" = "1" ] && echo "$USB_TYPE_L" | grep -qiE "usb|sdp|cdp|unknown"; then
+            C2C_PC_LINK=1
+        fi
+    fi
+
+    # 默认阈值（旧行为）
+    SOFT_TRIGGER_DYNAMIC=$SOFT_TRIGGER_STREAK
+    SOFT_COOLDOWN_DYNAMIC=$SOFT_COOLDOWN_SEC
+    SMART_HARD_DYNAMIC=$SMART_HARD_STREAK
+    SCREENOFF_SOFT_TRIGGER_DYNAMIC=$SCREENOFF_SOFT_TRIGGER_STREAK
+    SCREENOFF_SOFT_COOLDOWN_DYNAMIC=$SCREENOFF_SOFT_COOLDOWN_SEC
+    ALLOW_HARD_NORMAL=1
+    ALLOW_HARD_SCREENOFF=1
+
+    if [ "$PORT_POLICY_MODE" = "1" ]; then
+        case "$PORT_CLASS" in
+            sdp)
+                SOFT_TRIGGER_DYNAMIC=4
+                SOFT_COOLDOWN_DYNAMIC=90
+                SMART_HARD_DYNAMIC=9999
+                SCREENOFF_SOFT_TRIGGER_DYNAMIC=7
+                SCREENOFF_SOFT_COOLDOWN_DYNAMIC=240
+                ALLOW_HARD_NORMAL=0
+                ALLOW_HARD_SCREENOFF=0
+                ;;
+            cdp)
+                SOFT_TRIGGER_DYNAMIC=3
+                SOFT_COOLDOWN_DYNAMIC=60
+                SMART_HARD_DYNAMIC=10
+                SCREENOFF_SOFT_TRIGGER_DYNAMIC=6
+                SCREENOFF_SOFT_COOLDOWN_DYNAMIC=180
+                ALLOW_HARD_NORMAL=1
+                ALLOW_HARD_SCREENOFF=0
+                ;;
+            unknown_pc)
+                SOFT_TRIGGER_DYNAMIC=5
+                SOFT_COOLDOWN_DYNAMIC=120
+                SMART_HARD_DYNAMIC=9999
+                SCREENOFF_SOFT_TRIGGER_DYNAMIC=8
+                SCREENOFF_SOFT_COOLDOWN_DYNAMIC=300
+                ALLOW_HARD_NORMAL=0
+                ALLOW_HARD_SCREENOFF=0
+                ;;
+            *)
+                ;;
+        esac
     fi
 
     EFFECTIVE_CHARGING=0
     if echo "$BAT_STATUS_L" | grep -qiE "charging|full"; then
         EFFECTIVE_CHARGING=1
-    elif [ -n "$BAT_CURRENT_ABS" ] && [ "$BAT_CURRENT_ABS" -gt 50000 ] 2>/dev/null; then
-        # 部分机型电流符号方向不同，使用绝对值做兜底判定
+    elif [ -n "$USB_CURRENT_ABS" ] && [ "$USB_CURRENT_ABS" -gt 20000 ] 2>/dev/null; then
+        # 优先使用 USB 输入电流判断，降低仅看 battery/status 的误判
+        EFFECTIVE_CHARGING=1
+    elif [ -n "$BAT_CURRENT_ABS" ] && [ "$BAT_CURRENT_ABS" -gt 300000 ] 2>/dev/null; then
+        # 兜底：部分机型无 USB 电流节点时，用较高阈值判定有效输入
         EFFECTIVE_CHARGING=1
     fi
 
     SCREEN_GUARD_ACTIVE=0
     if [ "$SCREENOFF_GUARD_MODE" = "1" ] && [ "$C2C_PC_LINK" -eq 1 ] && [ "$SCREEN_STATE" != "on" ]; then
         SCREEN_GUARD_ACTIVE=1
+    fi
+
+    FLAP_GUARD_ACTIVE=0
+    if [ "$FLAP_GUARD_MODE" = "1" ] && [ "$SCREEN_GUARD_ACTIVE" -eq 1 ] && [ "$FLAP_GUARD_UNTIL" -gt "$NOW_TS" ]; then
+        FLAP_GUARD_ACTIVE=1
     fi
 
     C2C_NEED_RECOVERY=0
@@ -447,18 +687,30 @@ while true; do
     if [ "$C2C_FIX_MODE" = "0" ]; then
         CUR_C2C_STATE="disabled"
         recover_c2c_normal
+    elif [ "$FLAP_GUARD_ACTIVE" -eq 1 ]; then
+        CUR_C2C_STATE="flap_guard"
+
+        # 保护态中仅低频软修复，避免频繁动作导致反复跳连
+        if [ "$C2C_NEED_RECOVERY" -eq 1 ] && [ $((NOW_TS - LAST_SOFT_ACTION_TS)) -ge "$FLAP_GUARD_SOFT_COOLDOWN_SEC" ]; then
+            recover_c2c_soft
+            LAST_SOFT_ACTION_TS=$NOW_TS
+            log_msg "[防抖守护] 保护态低频软修复: type=${USB_TYPE:-unknown}, battery=${BAT_STATUS:-unknown}, usb_current=${USB_CURRENT_NOW:-unknown}, current_now=${BAT_CURRENT_NOW:-unknown}"
+        fi
+
+        # 保护态禁止强动作
     elif [ "$C2C_NEED_RECOVERY" -eq 1 ]; then
         CUR_C2C_STATE="recovery"
 
         if [ "$SCREEN_GUARD_ACTIVE" -eq 1 ]; then
-            if [ "$BAD_STREAK" -ge "$SCREENOFF_SOFT_TRIGGER_STREAK" ] && [ $((NOW_TS - LAST_SOFT_ACTION_TS)) -ge "$SCREENOFF_SOFT_COOLDOWN_SEC" ]; then
+            if [ "$BAD_STREAK" -ge "$SCREENOFF_SOFT_TRIGGER_DYNAMIC" ] && [ $((NOW_TS - LAST_SOFT_ACTION_TS)) -ge "$SCREENOFF_SOFT_COOLDOWN_DYNAMIC" ]; then
                 recover_c2c_soft
                 LAST_SOFT_ACTION_TS=$NOW_TS
-                log_msg "[C2C修复][锁屏守护] 软修复已执行: streak=$BAD_STREAK, type=${USB_TYPE:-unknown}, battery=${BAT_STATUS:-unknown}, current_now=${BAT_CURRENT_NOW:-unknown}"
+                log_msg "[C2C修复][锁屏守护] 软修复已执行: streak=$BAD_STREAK, type=${USB_TYPE:-unknown}, battery=${BAT_STATUS:-unknown}, usb_current=${USB_CURRENT_NOW:-unknown}, current_now=${BAT_CURRENT_NOW:-unknown}"
             fi
 
             if [ "$C2C_FIX_MODE" = "2" ] \
-                && [ "$BAD_STREAK" -ge "$SCREENOFF_SOFT_TRIGGER_STREAK" ] \
+                && [ "$ALLOW_HARD_SCREENOFF" -eq 1 ] \
+                && [ "$BAD_STREAK" -ge "$SCREENOFF_SOFT_TRIGGER_DYNAMIC" ] \
                 && [ "$HARD_ACTIONS_IN_SESSION" -lt "$HARD_MAX_PER_SESSION" ] \
                 && [ $((NOW_TS - LAST_HARD_ACTION_TS)) -ge "$HARD_COOLDOWN_SEC" ]; then
                 ROLE_FIXED=$(force_sink_role_if_needed)
@@ -469,16 +721,16 @@ while true; do
                 fi
             fi
         else
-            if [ "$BAD_STREAK" -ge "$SOFT_TRIGGER_STREAK" ] && [ $((NOW_TS - LAST_SOFT_ACTION_TS)) -ge "$SOFT_COOLDOWN_SEC" ]; then
+            if [ "$BAD_STREAK" -ge "$SOFT_TRIGGER_DYNAMIC" ] && [ $((NOW_TS - LAST_SOFT_ACTION_TS)) -ge "$SOFT_COOLDOWN_DYNAMIC" ]; then
                 recover_c2c_soft
                 LAST_SOFT_ACTION_TS=$NOW_TS
-                log_msg "[C2C修复] 软修复已执行: streak=$BAD_STREAK, type=${USB_TYPE:-unknown}, role=${USB_ROLE:-unknown}, battery=${BAT_STATUS:-unknown}"
+                log_msg "[C2C修复] 软修复已执行: streak=$BAD_STREAK, type=${USB_TYPE:-unknown}, role=${USB_ROLE:-unknown}, battery=${BAT_STATUS:-unknown}, usb_current=${USB_CURRENT_NOW:-unknown}"
             fi
 
             DO_HARD=0
-            if [ "$C2C_FIX_MODE" = "2" ] && [ "$BAD_STREAK" -ge "$SOFT_TRIGGER_STREAK" ]; then
+            if [ "$C2C_FIX_MODE" = "2" ] && [ "$ALLOW_HARD_NORMAL" -eq 1 ] && [ "$BAD_STREAK" -ge "$SOFT_TRIGGER_DYNAMIC" ]; then
                 DO_HARD=1
-            elif [ "$C2C_FIX_MODE" = "1" ] && [ "$BAD_STREAK" -ge "$SMART_HARD_STREAK" ]; then
+            elif [ "$C2C_FIX_MODE" = "1" ] && [ "$ALLOW_HARD_NORMAL" -eq 1 ] && [ "$BAD_STREAK" -ge "$SMART_HARD_DYNAMIC" ]; then
                 # 智能模式下仅在长时间故障后触发一次强动作
                 DO_HARD=1
             fi
@@ -501,13 +753,20 @@ while true; do
 
     if [ "$CUR_C2C_STATE" != "$LAST_C2C_STATE" ]; then
         if [ "$CUR_C2C_STATE" = "recovery" ]; then
-            log_msg "[C2C状态] 进入恢复模式: online=${USB_ONLINE:-0}, type=${USB_TYPE:-unknown}, role=${USB_ROLE:-unknown}, battery=${BAT_STATUS:-unknown}, current_now=${BAT_CURRENT_NOW:-unknown}, screen=${SCREEN_STATE:-unknown}, temp=${BAT_TEMP:-unknown}"
+            log_msg "[C2C状态] 进入恢复模式: online=${USB_ONLINE:-0}, type=${USB_TYPE:-unknown}, role=${USB_ROLE:-unknown}, battery=${BAT_STATUS:-unknown}, usb_current=${USB_CURRENT_NOW:-unknown}, current_now=${BAT_CURRENT_NOW:-unknown}, screen=${SCREEN_STATE:-unknown}, temp=${BAT_TEMP:-unknown}"
+        elif [ "$CUR_C2C_STATE" = "flap_guard" ]; then
+            log_msg "[C2C状态] 进入防抖守护态: online=${USB_ONLINE:-0}, type=${USB_TYPE:-unknown}, role=${USB_ROLE:-unknown}, battery=${BAT_STATUS:-unknown}, usb_current=${USB_CURRENT_NOW:-unknown}, screen=${SCREEN_STATE:-unknown}, guard_left=$((FLAP_GUARD_UNTIL - NOW_TS))s"
         elif [ "$CUR_C2C_STATE" = "disabled" ]; then
             log_msg "[C2C状态] C2C修复已关闭（mode=0）"
         else
-            log_msg "[C2C状态] 返回常规模式: online=${USB_ONLINE:-0}, type=${USB_TYPE:-unknown}, role=${USB_ROLE:-unknown}, battery=${BAT_STATUS:-unknown}, current_now=${BAT_CURRENT_NOW:-unknown}, screen=${SCREEN_STATE:-unknown}, temp=${BAT_TEMP:-unknown}"
+            log_msg "[C2C状态] 返回常规模式: online=${USB_ONLINE:-0}, type=${USB_TYPE:-unknown}, role=${USB_ROLE:-unknown}, battery=${BAT_STATUS:-unknown}, usb_current=${USB_CURRENT_NOW:-unknown}, current_now=${BAT_CURRENT_NOW:-unknown}, screen=${SCREEN_STATE:-unknown}, temp=${BAT_TEMP:-unknown}"
         fi
         LAST_C2C_STATE="$CUR_C2C_STATE"
+    fi
+
+    if [ "$FLAP_TRIG_TOTAL" -gt 0 ] && [ $((NOW_TS - LAST_STATS_REPORT_TS)) -ge "$STATS_REPORT_INTERVAL_SEC" ]; then
+        log_flap_summary "periodic"
+        LAST_STATS_REPORT_TS=$NOW_TS
     fi
 
     sleep "$POLL_INTERVAL"

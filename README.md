@@ -14,7 +14,7 @@
 ## 2. 当前版本
 
 - 版本：v1.1
-- versionCode：17
+- versionCode：11
 - 模块 ID：op12_charging_fix
 
 ## 3. 适用机型与策略
@@ -57,6 +57,20 @@
 - 使用 `current_now` 绝对值兜底，避免仅靠 `battery/status` 误判
 - 屏幕状态变化时自动清空异常连击计数，避免亮灭屏切换造成误触发
 
+### 4.5 电脑端口类型自动策略（v1.8 重点）
+
+- 自动识别端口类型：`SDP`、`CDP`、`unknown_pc`
+- `SDP` 走更保守策略：提高触发阈值、延长冷却、默认禁用强动作
+- `CDP` 走平衡策略：允许软修复，必要时有限强修复
+- `unknown_pc` 走最保守策略：优先避免误触发导致跳连
+
+### 4.6 黑屏反复连接防抖保护态（v1.9 重点）
+
+- 识别黑屏下短时间多次断连/重连（session churn）
+- 自动进入稳定保护态，期间仅低频软修复，禁止频繁强动作
+- 保护态结束后自动返回常规策略
+- 新增 USB 输入电流判定（`usb/current_now`）以降低黑屏误判
+
 ## 5. 开关与参数
 
 ### 5.1 C2C 修复模式开关
@@ -85,12 +99,34 @@
 - `0`：关闭锁屏守护
 - `1`：开启锁屏守护（默认）
 
-### 5.3 默认初始化逻辑
+### 5.3 端口策略开关
+
+- `persist.sys.oplus.c2c.port.policy.enable`
+- `persist.sys.oppo.c2c.port.policy.enable`
+
+取值如下。
+
+- `0`：关闭端口自适应（兼容旧行为）
+- `1`：开启端口自适应（默认）
+
+### 5.4 黑屏防抖守护开关
+
+- `persist.sys.oplus.c2c.flap.guard.enable`
+- `persist.sys.oppo.c2c.flap.guard.enable`
+
+取值如下。
+
+- `0`：关闭黑屏防抖守护
+- `1`：开启黑屏防抖守护（默认）
+
+### 5.5 默认初始化逻辑
 
 如果系统没有设置相关值，模块在 post-fs-data 阶段自动初始化。
 
 - `c2c.fix.mode = 1`
 - `c2c.screenoff.guard = 1`
+- `c2c.port.policy.enable = 1`
+- `c2c.flap.guard.enable = 1`
 
 ## 6. 推荐配置（直接可用）
 
@@ -98,16 +134,22 @@
 
 - `c2c.fix.mode = 1`
 - `c2c.screenoff.guard = 1`
+- `c2c.port.policy.enable = 1`
+- `c2c.flap.guard.enable = 1`
 
 ### 6.2 锁屏仍偶发不充（加强恢复）
 
 - `c2c.fix.mode = 2`
 - `c2c.screenoff.guard = 1`
+- `c2c.port.policy.enable = 1`
+- `c2c.flap.guard.enable = 1`
 
 ### 6.3 A/B 排障（对照测试）
 
 - `c2c.fix.mode = 0`
 - `c2c.screenoff.guard = 1`
+- `c2c.port.policy.enable = 1`
+- `c2c.flap.guard.enable = 1`
 
 ## 7. 设置命令（root）
 
@@ -129,6 +171,18 @@ resetprop persist.sys.oplus.c2c.screenoff.guard 1
 resetprop persist.sys.oppo.c2c.screenoff.guard 1
 resetprop persist.sys.oplus.c2c.screenoff.guard 0
 resetprop persist.sys.oppo.c2c.screenoff.guard 0
+
+# 端口类型自动策略开/关
+resetprop persist.sys.oplus.c2c.port.policy.enable 1
+resetprop persist.sys.oppo.c2c.port.policy.enable 1
+resetprop persist.sys.oplus.c2c.port.policy.enable 0
+resetprop persist.sys.oppo.c2c.port.policy.enable 0
+
+# 黑屏防抖守护开/关
+resetprop persist.sys.oplus.c2c.flap.guard.enable 1
+resetprop persist.sys.oppo.c2c.flap.guard.enable 1
+resetprop persist.sys.oplus.c2c.flap.guard.enable 0
+resetprop persist.sys.oppo.c2c.flap.guard.enable 0
 ```
 
 建议设置后重启一次，确保所有组件读取到同一状态。
@@ -144,11 +198,24 @@ resetprop persist.sys.oppo.c2c.screenoff.guard 0
 - 每次插线会话强修复上限：1 次
 - 智能模式强修复阈值：连续异常 8 次
 
+端口自适应策略（`port.policy.enable=1`）下，会按 USB 类型自动调整阈值与强动作权限。
+
+- `SDP`：提高触发门槛并延长冷却，默认不执行强动作
+- `CDP`：中等门槛，亮屏下允许受限强动作
+- `unknown_pc`：最高保守级别，优先避免反复跳连
+
 锁屏守护额外参数如下。
 
 - 锁屏软修复触发：连续异常 6 次
 - 锁屏软修复冷却：180s
 - 锁屏下默认避免频繁强动作（仅 mode=2 且满足条件时允许一次）
+
+黑屏防抖保护态参数如下。
+
+- 短时重连窗口：180s
+- 触发阈值：窗口内 4 次会话抖动
+- 保护态持续：300s
+- 保护态软修复冷却：300s
 
 ## 9. 安装方法
 
@@ -169,7 +236,15 @@ resetprop persist.sys.oppo.c2c.screenoff.guard 0
 cat /data/local/tmp/op12_chg_postfs.log
 cat /data/local/tmp/op12_chg_fix.log
 grep -i "C2C\|屏幕状态\|锁屏守护" /data/local/tmp/op12_chg_fix.log
+grep -i "防抖统计\|防抖统计汇总" /data/local/tmp/op12_chg_fix.log
 ```
+
+防抖统计日志用于快速判断哪类电脑端口最容易触发黑屏跳连：
+
+- `trigger#`：黑屏保护态累计触发次数
+- `class`：本次触发对应端口类型（`sdp`/`cdp`/`unknown_pc` 等）
+- `top`：当前触发最多的端口类型与次数
+- `sdp/cdp/unknown_pc/...`：各类型累计触发计数
 
 ### 10.3 重点观察关键字
 
@@ -178,6 +253,9 @@ grep -i "C2C\|屏幕状态\|锁屏守护" /data/local/tmp/op12_chg_fix.log
 - 软修复已执行
 - 强修复已执行
 - 锁屏守护
+- 防抖守护
+- 防抖统计
+- 防抖统计汇总
 - 屏幕状态
 - Type-C role: source -> sink
 
@@ -188,6 +266,7 @@ grep -i "C2C\|屏幕状态\|锁屏守护" /data/local/tmp/op12_chg_fix.log
 3. 若仍有锁屏不充，切 `mode=2` 再测试。
 4. 若恢复动作过多，保持 `mode=1` 并确认线材、电脑口、Hub 是否稳定。
 5. 对比亮屏与灭屏日志差异，重点关注 `current_now` 和 `screen` 字段。
+6. 若日志频繁出现“防抖守护”，说明已进入黑屏稳定保护态，可先维持默认配置继续观察。
 
 ## 12. 注意事项
 

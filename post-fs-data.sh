@@ -85,6 +85,26 @@ else
 	log_p "锁屏守护沿用现有配置: oplus=${C2C_SCREENGUARD_OPLUS:-<empty>}, oppo=${C2C_SCREENGUARD_OPPO:-<empty>}"
 fi
 
+C2C_PORT_POLICY_OPLUS=$(getprop persist.sys.oplus.c2c.port.policy.enable)
+C2C_PORT_POLICY_OPPO=$(getprop persist.sys.oppo.c2c.port.policy.enable)
+if [ -z "$C2C_PORT_POLICY_OPLUS" ] && [ -z "$C2C_PORT_POLICY_OPPO" ]; then
+	# 默认按电脑端口类型自适应，降低个别 PC 端口引发的跳连概率
+	set_prop_dual "persist.sys.oplus.c2c.port.policy.enable" "persist.sys.oppo.c2c.port.policy.enable" "1"
+	log_p "端口策略默认初始化: port.policy.enable=1"
+else
+	log_p "端口策略沿用现有配置: oplus=${C2C_PORT_POLICY_OPLUS:-<empty>}, oppo=${C2C_PORT_POLICY_OPPO:-<empty>}"
+fi
+
+C2C_FLAP_GUARD_OPLUS=$(getprop persist.sys.oplus.c2c.flap.guard.enable)
+C2C_FLAP_GUARD_OPPO=$(getprop persist.sys.oppo.c2c.flap.guard.enable)
+if [ -z "$C2C_FLAP_GUARD_OPLUS" ] && [ -z "$C2C_FLAP_GUARD_OPPO" ]; then
+	# 默认启用黑屏防抖守护，针对锁屏下反复连接问题
+	set_prop_dual "persist.sys.oplus.c2c.flap.guard.enable" "persist.sys.oppo.c2c.flap.guard.enable" "1"
+	log_p "黑屏防抖默认初始化: flap.guard.enable=1"
+else
+	log_p "黑屏防抖沿用现有配置: oplus=${C2C_FLAP_GUARD_OPLUS:-<empty>}, oppo=${C2C_FLAP_GUARD_OPPO:-<empty>}"
+fi
+
 PROFILE=$(detect_profile)
 BAT_TEMP=$(read_battery_temp)
 HOT_MODE=0

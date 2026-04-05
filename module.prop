@@ -1,6 +1,6 @@
 id=op12_charging_fix
 name=OnePlus/OPlus 充电兼容修复 (中国大陆硬件)
 version=v1.1
-versionCode=17
+versionCode=11
 author=blueokanna
-description=新增锁屏/灭屏 C2C 防跳连守护与电流兜底判定，修复锁屏时反复重连/不充电问题；并保留 C2C 开关、防抖、分档与温控策略。Systemless，不改 system 分区。
+description=新增黑屏短时多次重连防抖保护态与 USB 输入电流兜底判定，修复锁屏反复连接问题；并保留端口自适应、锁屏守护、C2C 开关、防抖、分档与温控策略。Systemless，不改 system 分区。
