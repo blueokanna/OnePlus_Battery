@@ -1,7 +1,4 @@
 #!/system/bin/sh
-# post-fs-data.sh
-# 在文件系统挂载后、system_server 启动前执行
-# 此阶段 resetprop 注入，确保充电守护进程读到正确值
 
 MODDIR=${0%/*}
 LOG=/data/local/tmp/op12_chg_postfs.log
@@ -29,6 +26,29 @@ set_prop_dual() {
 	set_prop "$oppo_key" "$val"
 }
 
+detect_profile() {
+	local id
+	id="$(getprop ro.product.model) $(getprop ro.product.device) $(getprop ro.product.name)"
+
+	if echo "$id" | grep -qiE "OnePlus 12R|CPH2585|CPH2609|aston"; then
+		echo "op12r"
+	elif echo "$id" | grep -qiE "Ace|PGKM10|PGP110|PJA110|PJG110"; then
+		echo "ace"
+	elif echo "$id" | grep -qiE "OnePlus 12|CPH2573|PJD110|salami"; then
+		echo "op12"
+	else
+		echo "generic"
+	fi
+}
+
+read_battery_temp() {
+	if [ -f /sys/class/power_supply/battery/temp ]; then
+		cat /sys/class/power_supply/battery/temp 2>/dev/null
+		return
+	fi
+	echo ""
+}
+
 log_p "=== post-fs-data 充电属性注入开始 ==="
 log_p "model=$(getprop ro.product.model), device=$(getprop ro.product.device), region=$(getprop ro.oplus.regionmark)"
 
@@ -45,13 +65,82 @@ if ! echo "$BRAND $MANUFACTURER" | grep -qE "oneplus|oppo|realme|oplus"; then
 	exit 0
 fi
 
-set_prop_dual "persist.vendor.oplus.charger.version"          "persist.vendor.oppo.charger.version"          "2"
-set_prop_dual "persist.vendor.oplus.charger.voocphy_support"  "persist.vendor.oppo.charger.voocphy_support"  "3"
-set_prop_dual "persist.vendor.oplus.charger.chg_vooc_qc_back" "persist.vendor.oppo.charger.chg_vooc_qc_back" "0"
-set_prop_dual "persist.vendor.oplus.charger.mmi_test"         "persist.vendor.oppo.charger.mmi_test"         "0"
-set_prop_dual "persist.vendor.oplus.charger.check_usb"        "persist.vendor.oppo.charger.check_usb"        "0"
+C2C_MODE_OPLUS=$(getprop persist.sys.oplus.c2c.fix.mode)
+C2C_MODE_OPPO=$(getprop persist.sys.oppo.c2c.fix.mode)
+if [ -z "$C2C_MODE_OPLUS" ] && [ -z "$C2C_MODE_OPPO" ]; then
+	# 默认启用智能防抖模式，避免反复触发 USB 重新连接提示
+	set_prop_dual "persist.sys.oplus.c2c.fix.mode" "persist.sys.oppo.c2c.fix.mode" "1"
+	log_p "C2C开关默认初始化: mode=1(智能防抖)"
+else
+	log_p "C2C开关沿用现有配置: oplus=${C2C_MODE_OPLUS:-<empty>}, oppo=${C2C_MODE_OPPO:-<empty>}"
+fi
 
-set_prop_dual "persist.sys.oplus.charge.pps.disable"          "persist.sys.oppo.charge.pps.disable"          "0"
-set_prop_dual "persist.sys.oplus.charge.limit.enable"         "persist.sys.oppo.charge.limit.enable"         "0"
+PROFILE=$(detect_profile)
+BAT_TEMP=$(read_battery_temp)
+HOT_MODE=0
 
-log_p "属性注入完成（双命名空间兼容模式）"
+if [ -n "$BAT_TEMP" ] && [ "$BAT_TEMP" -ge 430 ] 2>/dev/null; then
+	HOT_MODE=1
+fi
+
+VOOCPHY=""
+QC_BACK=""
+CHECK_USB=""
+
+case "$PROFILE" in
+	op12)
+		VOOCPHY="3"
+		QC_BACK="0"
+		CHECK_USB="0"
+		;;
+	op12r)
+		VOOCPHY="2"
+		QC_BACK="0"
+		CHECK_USB="0"
+		;;
+	ace)
+		VOOCPHY="2"
+		QC_BACK="1"
+		CHECK_USB=""
+		;;
+	*)
+		VOOCPHY=""
+		QC_BACK=""
+		CHECK_USB=""
+		;;
+esac
+
+if [ "$HOT_MODE" -eq 1 ]; then
+	PPS_DISABLE="1"
+	QC_BACK="1"
+	log_p "温控策略: 电池温度=${BAT_TEMP}(0.1C) >= 430，启用保守充电策略"
+else
+	PPS_DISABLE="0"
+	log_p "温控策略: 电池温度=${BAT_TEMP:-unknown}(0.1C)，启用常规充电策略"
+fi
+
+log_p "设备分档: $PROFILE"
+
+# 安全基础项（所有 OPlus 设备）
+set_prop_dual "persist.vendor.oplus.charger.version"  "persist.vendor.oppo.charger.version"  "2"
+set_prop_dual "persist.vendor.oplus.charger.mmi_test" "persist.vendor.oppo.charger.mmi_test" "0"
+set_prop_dual "persist.sys.oplus.charge.limit.enable" "persist.sys.oppo.charge.limit.enable" "0"
+
+# 温控项（按温度动态）
+set_prop_dual "persist.sys.oplus.charge.pps.disable"          "persist.sys.oppo.charge.pps.disable"          "$PPS_DISABLE"
+set_prop_dual "persist.vendor.oplus.charger.chg_vooc_qc_back" "persist.vendor.oppo.charger.chg_vooc_qc_back" "$QC_BACK"
+
+# 分档项（仅目标机型）
+if [ -n "$VOOCPHY" ]; then
+	set_prop_dual "persist.vendor.oplus.charger.voocphy_support" "persist.vendor.oppo.charger.voocphy_support" "$VOOCPHY"
+else
+	log_p "跳过 voocphy_support 强制下发（generic 档）"
+fi
+
+if [ -n "$CHECK_USB" ]; then
+	set_prop_dual "persist.vendor.oplus.charger.check_usb" "persist.vendor.oppo.charger.check_usb" "$CHECK_USB"
+else
+	log_p "跳过 check_usb 强制下发（降低副作用）"
+fi
+
+log_p "属性注入完成（分档 + 温控策略）"
