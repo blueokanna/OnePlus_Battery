@@ -10,11 +10,6 @@
 
 模块采用 Systemless 方式（不改 system/vendor 分区），通过启动阶段脚本动态注入与纠偏属性。
 
-## 当前版本
-- 模块 ID：op12_charging_fix
-- 版本：v1.6
-- versionCode：16
-
 ## 适用范围
 
 ### 已重点适配
